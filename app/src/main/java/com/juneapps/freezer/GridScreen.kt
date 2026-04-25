@@ -52,6 +52,12 @@ import androidx.compose.ui.window.Dialog
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.viewmodel.compose.viewModel
 import rikka.shizuku.Shizuku
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.animation.core.FastOutLinearInEasing
 
 private sealed class GridItem {
     data class App(val app: InstalledApp) : GridItem()
@@ -66,6 +72,7 @@ fun GridScreen(viewModel: FreezerViewModel = viewModel()) {
     val selectedApps by viewModel.selectedApps.collectAsState()
     val shizukuStatus by viewModel.shizukuStatus.collectAsState()
     val lastResult by viewModel.lastResult.collectAsState()
+    val shatteringIds by viewModel.shatteringAppIds.collectAsState()
 
     var showPicker by remember { mutableStateOf(false) }
     var appPendingRemoval by remember { mutableStateOf<InstalledApp?>(null) }
@@ -129,6 +136,8 @@ fun GridScreen(viewModel: FreezerViewModel = viewModel()) {
                     when (item) {
                         is GridItem.App -> FrozenAppSlot(
                             app = item.app,
+                            isShattering = shatteringIds.contains(item.app.packageName),
+                            onShatterEnd = { viewModel.completeShatter(item.app.packageName) },
                             onClick = { appPendingRemoval = item.app }
                         )
                         is GridItem.AddButton -> AddButtonSlot(
@@ -206,38 +215,123 @@ fun ShizukuStatusBanner(status: FreezerViewModel.ShizukuStatus) {
 }
 
 @Composable
-fun FrozenAppSlot(app: InstalledApp, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .aspectRatio(1f)
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color(0xFF1E4D6B))
-            .clickable { onClick() },
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-            modifier = Modifier.padding(8.dp)
+fun FrozenAppSlot(
+    app: InstalledApp,
+    isShattering: Boolean,
+    onShatterEnd: () -> Unit,
+    onClick: () -> Unit
+) {
+    var hasAppeared by remember(app.packageName) { mutableStateOf(false) }
+
+    LaunchedEffect(app.packageName) {
+        kotlinx.coroutines.delay(16)
+        hasAppeared = true
+    }
+
+    val scaleIn by animateFloatAsState(
+        targetValue = if (hasAppeared) 1f else 0.4f,
+        animationSpec = tween(durationMillis = 450, easing = FastOutSlowInEasing),
+        label = "freeze_scale"
+    )
+    val alphaIn by animateFloatAsState(
+        targetValue = if (hasAppeared) 1f else 0f,
+        animationSpec = tween(durationMillis = 600, delayMillis = 100, easing = LinearOutSlowInEasing),
+        label = "freeze_alpha"
+    )
+
+    val shatterProgress by animateFloatAsState(
+        targetValue = if (isShattering) 1f else 0f,
+        animationSpec = tween(durationMillis = 550, easing = FastOutLinearInEasing),
+        label = "shatter_progress",
+        finishedListener = { value ->
+            if (value >= 1f) onShatterEnd()
+        }
+    )
+
+    val effectiveScale = scaleIn * (1f - shatterProgress * 0.3f)
+    val effectiveAlpha = alphaIn * (1f - shatterProgress)
+
+    Box(modifier = Modifier.aspectRatio(1f)) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    scaleX = effectiveScale
+                    scaleY = effectiveScale
+                    alpha = effectiveAlpha
+                }
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color(0xFF1E4D6B))
+                .clickable(enabled = !isShattering) { onClick() },
+            contentAlignment = Alignment.Center
         ) {
-            val bitmap = remember(app.packageName) {
-                app.icon.toBitmap().asImageBitmap()
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier.padding(8.dp)
+            ) {
+                val bitmap = remember(app.packageName) {
+                    app.icon.toBitmap().asImageBitmap()
+                }
+                Image(
+                    bitmap = bitmap,
+                    contentDescription = app.appName,
+                    modifier = Modifier
+                        .fillMaxWidth(0.6f)
+                        .aspectRatio(1f)
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = app.appName,
+                    color = Color(0xFFB3E5FC),
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center
+                )
             }
-            Image(
-                bitmap = bitmap,
-                contentDescription = app.appName,
-                modifier = Modifier
-                    .fillMaxWidth(0.6f)
-                    .aspectRatio(1f)
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = app.appName,
-                color = Color(0xFFB3E5FC),
-                fontSize = 10.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center
+        }
+
+        if (isShattering) {
+            ShatterOverlay(progress = shatterProgress)
+        }
+    }
+}
+
+@Composable
+fun ShatterOverlay(progress: Float) {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val cx = size.width / 2f
+        val cy = size.height / 2f
+
+        val shards = listOf(
+            Triple(-1.2f, -0.8f, 0.7f),
+            Triple(1.1f, -1.0f, 0.6f),
+            Triple(-1.0f, 1.1f, 0.8f),
+            Triple(1.2f, 0.9f, 0.65f),
+            Triple(0f, -1.4f, 0.5f),
+            Triple(0f, 1.3f, 0.55f),
+            Triple(-1.4f, 0f, 0.6f),
+            Triple(1.4f, 0f, 0.7f)
+        )
+
+        val maxDistance = size.minDimension * 0.7f
+        val shardSize = size.minDimension * 0.18f
+
+        shards.forEach { (dx, dy, sizeMultiplier) ->
+            val px = cx + dx * maxDistance * progress
+            val py = cy + dy * maxDistance * progress
+            val s = shardSize * sizeMultiplier * (1f - progress * 0.4f)
+            val shardAlpha = (1f - progress).coerceIn(0f, 1f)
+
+            drawPath(
+                path = androidx.compose.ui.graphics.Path().apply {
+                    moveTo(px, py - s)
+                    lineTo(px + s * 0.7f, py + s * 0.5f)
+                    lineTo(px - s * 0.7f, py + s * 0.5f)
+                    close()
+                },
+                color = Color(0xFFB3E5FC).copy(alpha = shardAlpha)
             )
         }
     }

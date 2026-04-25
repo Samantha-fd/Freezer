@@ -75,13 +75,26 @@ class FreezerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    private val _shatteringAppIds = MutableStateFlow<Set<String>>(emptySet())
+    val shatteringAppIds: StateFlow<Set<String>> = _shatteringAppIds.asStateFlow()
+
     fun removeApp(app: InstalledApp) {
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
                 freezeRepository.unfreezeApp(app.packageName)
             }
-            handleFreezeResult(result, app, isFreeze = false)
+            if (result is FreezeRepository.FreezeResult.Success) {
+                _shatteringAppIds.value = _shatteringAppIds.value + app.packageName
+                _lastResult.value = UiMessage.Info("${app.appName} unfrozen")
+            } else {
+                handleFreezeResult(result, app, isFreeze = false)
+            }
         }
+    }
+
+    fun completeShatter(packageName: String) {
+        _selectedApps.value = _selectedApps.value.filter { it.packageName != packageName }
+        _shatteringAppIds.value = _shatteringAppIds.value - packageName
     }
 
     private fun handleFreezeResult(
