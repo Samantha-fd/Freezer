@@ -20,6 +20,8 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -49,18 +51,37 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.viewmodel.compose.viewModel
+import rikka.shizuku.Shizuku
 
 private sealed class GridItem {
     data class App(val app: InstalledApp) : GridItem()
     data object AddButton : GridItem()
 }
 
+private const val SHIZUKU_PERMISSION_REQUEST_CODE = 1001
+
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun GridScreen(viewModel: FreezerViewModel = viewModel()) {
     val selectedApps by viewModel.selectedApps.collectAsState()
+    val shizukuStatus by viewModel.shizukuStatus.collectAsState()
+    val lastResult by viewModel.lastResult.collectAsState()
+
     var showPicker by remember { mutableStateOf(false) }
     var appPendingRemoval by remember { mutableStateOf<InstalledApp?>(null) }
+
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(lastResult) {
+        lastResult?.let { msg ->
+            val text = when (msg) {
+                is FreezerViewModel.UiMessage.Info -> msg.text
+                is FreezerViewModel.UiMessage.Error -> msg.text
+            }
+            snackbarHostState.showSnackbar(text)
+            viewModel.clearLastResult()
+        }
+    }
 
     val gridItems: List<GridItem> = remember(selectedApps) {
         selectedApps.map { GridItem.App(it) } + GridItem.AddButton
@@ -70,10 +91,7 @@ fun GridScreen(viewModel: FreezerViewModel = viewModel()) {
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        text = "Freezer",
-                        fontWeight = FontWeight.Bold
-                    )
+                    Text(text = "Freezer", fontWeight = FontWeight.Bold)
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = Color(0xFF0A1929),
@@ -81,34 +99,48 @@ fun GridScreen(viewModel: FreezerViewModel = viewModel()) {
                 )
             )
         },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = Color(0xFF0A1929)
     ) { padding ->
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(4),
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            items(
-                items = gridItems,
-                key = { item ->
-                    when (item) {
-                        is GridItem.App -> item.app.packageName
-                        is GridItem.AddButton -> "add_button"
+            ShizukuStatusBanner(status = shizukuStatus)
+
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(4),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(
+                    items = gridItems,
+                    key = { item ->
+                        when (item) {
+                            is GridItem.App -> item.app.packageName
+                            is GridItem.AddButton -> "add_button"
+                        }
                     }
-                }
-            ) { item ->
-                when (item) {
-                    is GridItem.App -> FrozenAppSlot(
-                        app = item.app,
-                        onClick = { appPendingRemoval = item.app }
-                    )
-                    is GridItem.AddButton -> AddButtonSlot(
-                        onClick = { showPicker = true }
-                    )
+                ) { item ->
+                    when (item) {
+                        is GridItem.App -> FrozenAppSlot(
+                            app = item.app,
+                            onClick = { appPendingRemoval = item.app }
+                        )
+                        is GridItem.AddButton -> AddButtonSlot(
+                            onClick = {
+                                if (shizukuStatus == FreezerViewModel.ShizukuStatus.READY) {
+                                    showPicker = true
+                                } else if (shizukuStatus == FreezerViewModel.ShizukuStatus.NEEDS_PERMISSION) {
+                                    Shizuku.requestPermission(SHIZUKU_PERMISSION_REQUEST_CODE)
+                                }
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -133,6 +165,42 @@ fun GridScreen(viewModel: FreezerViewModel = viewModel()) {
                 viewModel.removeApp(app)
                 appPendingRemoval = null
             }
+        )
+    }
+}
+
+@Composable
+fun ShizukuStatusBanner(status: FreezerViewModel.ShizukuStatus) {
+    val (text, bgColor, textColor) = when (status) {
+        FreezerViewModel.ShizukuStatus.READY -> return
+        FreezerViewModel.ShizukuStatus.UNKNOWN -> Triple(
+            "Checking Shizuku…",
+            Color(0xFF13293D),
+            Color(0xFF88B0C4)
+        )
+        FreezerViewModel.ShizukuStatus.NOT_RUNNING -> Triple(
+            "Shizuku not running. Open Shizuku and start it.",
+            Color(0xFF4D1E1E),
+            Color(0xFFFFB3B3)
+        )
+        FreezerViewModel.ShizukuStatus.NEEDS_PERMISSION -> Triple(
+            "Tap + and grant permission to continue.",
+            Color(0xFF4D3D1E),
+            Color(0xFFFFD79A)
+        )
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(bgColor)
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+    ) {
+        Text(
+            text = text,
+            color = textColor,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium
         )
     }
 }
@@ -238,7 +306,7 @@ fun UnfreezeDialog(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "This will remove it from your frozen list.",
+                    text = "This will re-enable the app.",
                     color = Color(0xFF88B0C4),
                     fontSize = 13.sp
                 )
