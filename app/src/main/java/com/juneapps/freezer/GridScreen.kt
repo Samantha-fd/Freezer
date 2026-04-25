@@ -73,6 +73,7 @@ fun GridScreen(viewModel: FreezerViewModel = viewModel()) {
     val shizukuStatus by viewModel.shizukuStatus.collectAsState()
     val lastResult by viewModel.lastResult.collectAsState()
     val shatteringIds by viewModel.shatteringAppIds.collectAsState()
+    val showOnboarding by viewModel.showOnboarding.collectAsState()
 
     var showPicker by remember { mutableStateOf(false) }
     var appPendingRemoval by remember { mutableStateOf<InstalledApp?>(null) }
@@ -176,26 +177,147 @@ fun GridScreen(viewModel: FreezerViewModel = viewModel()) {
             }
         )
     }
+
+    if (showOnboarding) {
+        OnboardingScreen(onDismiss = { viewModel.dismissOnboarding() })
+    }
 }
 
 @Composable
+fun OnboardingScreen(onDismiss: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF0A1929))
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = "❄",
+                color = Color(0xFFB3E5FC),
+                fontSize = 64.sp
+            )
+            Spacer(modifier = Modifier.height(24.dp))
+            Text(
+                text = "Welcome to Freezer",
+                color = Color(0xFFB3E5FC),
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = "Disable apps without uninstalling them. Save battery and stop notifications without losing your data.",
+                color = Color(0xFF88B0C4),
+                fontSize = 14.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 12.dp)
+            )
+            Spacer(modifier = Modifier.height(32.dp))
+
+            OnboardingStep(
+                number = "1",
+                title = "Install Shizuku",
+                description = "Freezer uses Shizuku — a free, open-source helper app — to safely manage other apps."
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            OnboardingStep(
+                number = "2",
+                title = "Start Shizuku once per reboot",
+                description = "Open Shizuku and tap \"Start via Wireless debugging.\" Takes 30 seconds."
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            OnboardingStep(
+                number = "3",
+                title = "Freeze apps",
+                description = "Tap +, pick an app, and watch it freeze. Tap a frozen app to bring it back."
+            )
+
+            Spacer(modifier = Modifier.height(40.dp))
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFF1E4D6B))
+                    .clickable { onDismiss() }
+                    .padding(horizontal = 32.dp, vertical = 14.dp)
+            ) {
+                Text(
+                    text = "Get started",
+                    color = Color(0xFFB3E5FC),
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun OnboardingStep(number: String, title: String, description: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.Top
+    ) {
+        Box(
+            modifier = Modifier
+                .height(28.dp)
+                .aspectRatio(1f)
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color(0xFF1E4D6B)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = number,
+                color = Color(0xFFB3E5FC),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+        Spacer(modifier = Modifier.fillMaxWidth(0.04f))
+        Column {
+            Text(
+                text = title,
+                color = Color(0xFFB3E5FC),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = description,
+                color = Color(0xFF88B0C4),
+                fontSize = 12.sp
+            )
+        }
+    }
+}
+@Composable
 fun ShizukuStatusBanner(status: FreezerViewModel.ShizukuStatus) {
-    val (text, bgColor, textColor) = when (status) {
+    val context = LocalContext.current
+
+    val (text, bgColor, textColor, action) = when (status) {
         FreezerViewModel.ShizukuStatus.READY -> return
-        FreezerViewModel.ShizukuStatus.UNKNOWN -> Triple(
+        FreezerViewModel.ShizukuStatus.UNKNOWN -> BannerConfig(
             "Checking Shizuku…",
             Color(0xFF13293D),
-            Color(0xFF88B0C4)
+            Color(0xFF88B0C4),
+            null
         )
-        FreezerViewModel.ShizukuStatus.NOT_RUNNING -> Triple(
-            "Shizuku not running. Open Shizuku and start it.",
+        FreezerViewModel.ShizukuStatus.NOT_RUNNING -> BannerConfig(
+            "Shizuku not running. Tap to open Shizuku and start it.",
             Color(0xFF4D1E1E),
-            Color(0xFFFFB3B3)
+            Color(0xFFFFB3B3),
+            BannerAction.OpenShizuku
         )
-        FreezerViewModel.ShizukuStatus.NEEDS_PERMISSION -> Triple(
+        FreezerViewModel.ShizukuStatus.NEEDS_PERMISSION -> BannerConfig(
             "Tap + and grant permission to continue.",
             Color(0xFF4D3D1E),
-            Color(0xFFFFD79A)
+            Color(0xFFFFD79A),
+            null
         )
     }
 
@@ -203,6 +325,11 @@ fun ShizukuStatusBanner(status: FreezerViewModel.ShizukuStatus) {
         modifier = Modifier
             .fillMaxWidth()
             .background(bgColor)
+            .let { mod ->
+                if (action == BannerAction.OpenShizuku) {
+                    mod.clickable { openShizukuApp(context) }
+                } else mod
+            }
             .padding(horizontal = 16.dp, vertical = 10.dp)
     ) {
         Text(
@@ -211,6 +338,26 @@ fun ShizukuStatusBanner(status: FreezerViewModel.ShizukuStatus) {
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium
         )
+    }
+}
+
+private data class BannerConfig(
+    val text: String,
+    val bgColor: Color,
+    val textColor: Color,
+    val action: BannerAction?
+)
+
+private enum class BannerAction {
+    OpenShizuku
+}
+
+private fun openShizukuApp(context: android.content.Context) {
+    val packageManager = context.packageManager
+    val launchIntent = packageManager.getLaunchIntentForPackage("moe.shizuku.privileged.api")
+    if (launchIntent != null) {
+        launchIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(launchIntent)
     }
 }
 

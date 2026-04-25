@@ -15,6 +15,7 @@ class FreezerViewModel(application: Application) : AndroidViewModel(application)
     private val appRepository = AppRepository(application)
     private val freezeRepository = FreezeRepository()
 
+    private val frozenAppsStore = FrozenAppsStore(application)
     private val _installedApps = MutableStateFlow<List<InstalledApp>>(emptyList())
     val installedApps: StateFlow<List<InstalledApp>> = _installedApps.asStateFlow()
 
@@ -30,6 +31,9 @@ class FreezerViewModel(application: Application) : AndroidViewModel(application)
     private val _lastResult = MutableStateFlow<UiMessage?>(null)
     val lastResult: StateFlow<UiMessage?> = _lastResult.asStateFlow()
 
+    private val _showOnboarding = MutableStateFlow(false)
+    val showOnboarding: StateFlow<Boolean> = _showOnboarding.asStateFlow()
+
     enum class ShizukuStatus {
         UNKNOWN, NOT_RUNNING, NEEDS_PERMISSION, READY
     }
@@ -37,6 +41,43 @@ class FreezerViewModel(application: Application) : AndroidViewModel(application)
     sealed class UiMessage {
         data class Info(val text: String) : UiMessage()
         data class Error(val text: String) : UiMessage()
+    }
+
+    init {
+        _showOnboarding.value = !frozenAppsStore.isOnboardingComplete()
+        restoreFrozenApps()
+    }
+
+    private fun restoreFrozenApps() {
+        viewModelScope.launch {
+            val records = withContext(Dispatchers.IO) {
+                frozenAppsStore.loadFrozenApps()
+            }
+            val packageManager = getApplication<Application>().packageManager
+            val restored = records.mapNotNull { record ->
+                try {
+                    val info = packageManager.getApplicationInfo(record.packageName, 0)
+                    val isActuallyFrozen = withContext(Dispatchers.IO) {
+                        freezeRepository.isAppFrozen(record.packageName)
+                    }
+                    if (!isActuallyFrozen) return@mapNotNull null
+                    InstalledApp(
+                        packageName = record.packageName,
+                        appName = record.appName,
+                        icon = packageManager.getApplicationIcon(info),
+                        isSystemApp = false
+                    )
+                } catch (_: Exception) {
+                    null
+                }
+            }
+            _selectedApps.value = restored
+            val survivingPackages = restored.map { it.packageName }.toSet()
+            withContext(Dispatchers.IO) {
+                val updatedRecords = records.filter { it.packageName in survivingPackages }
+                frozenAppsStore.saveFrozenApps(updatedRecords)
+            }
+        }
     }
 
     fun checkShizukuStatus() {
@@ -85,6 +126,9 @@ class FreezerViewModel(application: Application) : AndroidViewModel(application)
             }
             if (result is FreezeRepository.FreezeResult.Success) {
                 _shatteringAppIds.value = _shatteringAppIds.value + app.packageName
+                viewModelScope.launch(Dispatchers.IO) {
+                    frozenAppsStore.removeFrozenApp(app.packageName)
+                }
                 _lastResult.value = UiMessage.Info("${app.appName} unfrozen")
             } else {
                 handleFreezeResult(result, app, isFreeze = false)
@@ -97,6 +141,7 @@ class FreezerViewModel(application: Application) : AndroidViewModel(application)
         _shatteringAppIds.value = _shatteringAppIds.value - packageName
     }
 
+
     private fun handleFreezeResult(
         result: FreezeRepository.FreezeResult,
         app: InstalledApp,
@@ -106,10 +151,22 @@ class FreezerViewModel(application: Application) : AndroidViewModel(application)
             is FreezeRepository.FreezeResult.Success -> {
                 if (isFreeze) {
                     _selectedApps.value = _selectedApps.value + app
+                    viewModelScope.launch(Dispatchers.IO) {
+                        frozenAppsStore.addFrozenApp(
+                            FrozenAppRecord(
+                                packageName = app.packageName,
+                                appName = app.appName,
+                                frozenAt = System.currentTimeMillis()
+                            )
+                        )
+                    }
                     _lastResult.value = UiMessage.Info("${app.appName} frozen")
                 } else {
                     _selectedApps.value = _selectedApps.value.filter {
                         it.packageName != app.packageName
+                    }
+                    viewModelScope.launch(Dispatchers.IO) {
+                        frozenAppsStore.removeFrozenApp(app.packageName)
                     }
                     _lastResult.value = UiMessage.Info("${app.appName} unfrozen")
                 }
@@ -130,5 +187,12 @@ class FreezerViewModel(application: Application) : AndroidViewModel(application)
 
     fun clearLastResult() {
         _lastResult.value = null
+    }
+
+    fun dismissOnboarding() {
+        viewModelScope.launch(Dispatchers.IO) {
+            frozenAppsStore.markOnboardingComplete()
+        }
+        _showOnboarding.value = false
     }
 }
