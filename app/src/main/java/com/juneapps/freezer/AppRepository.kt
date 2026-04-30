@@ -31,7 +31,13 @@ class AppRepository(private val context: Context) {
         "com.android.webview",
 
         // Chrome — also serves as system WebView provider on some devices
-        "com.android.chrome"
+        "com.android.chrome",
+
+        // Authenticator apps — freezing locks you out of 2FA accounts
+        "com.google.android.apps.authenticator2",
+        "com.azure.authenticator",
+        "com.duosecurity.duomobile",
+        "com.authy.authy"
     )
 
     fun getInstalledApps(): List<InstalledApp> {
