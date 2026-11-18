@@ -12,6 +12,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -23,6 +26,14 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -38,6 +49,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -58,6 +74,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.animation.core.FastOutLinearInEasing
+import kotlinx.coroutines.launch
 
 private sealed class GridItem {
     data class App(val app: InstalledApp) : GridItem()
@@ -68,7 +85,7 @@ private const val SHIZUKU_PERMISSION_REQUEST_CODE = 1001
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-fun GridScreen(viewModel: FreezerViewModel = viewModel()) {
+fun GridScreen(viewModel: FreezerViewModel = viewModel(), lockEnabled: Boolean = false, onToggleLock: () -> Unit = {}) {
     val selectedApps by viewModel.selectedApps.collectAsState()
     val shizukuStatus by viewModel.shizukuStatus.collectAsState()
     val lastResult by viewModel.lastResult.collectAsState()
@@ -76,6 +93,10 @@ fun GridScreen(viewModel: FreezerViewModel = viewModel()) {
     val showOnboarding by viewModel.showOnboarding.collectAsState()
 
     var showPicker by remember { mutableStateOf(false) }
+    var showTilePicker by remember { mutableStateOf(false) }
+    var tileSetupApp by remember { mutableStateOf<InstalledApp?>(null) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val appContext = LocalContext.current
     var appPendingRemoval by remember { mutableStateOf<InstalledApp?>(null) }
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -100,6 +121,10 @@ fun GridScreen(viewModel: FreezerViewModel = viewModel()) {
             TopAppBar(
                 title = {
                     Text(text = "Freezer", fontWeight = FontWeight.Bold)
+                },
+                actions = {
+                    TextButton(onClick = { showTilePicker = true }) { Text("Tile", color = Color(0xFFB3E5FC)) }
+                    TextButton(onClick = onToggleLock) { Text(if (lockEnabled) "Unlock setting" else "App lock", color = Color(0xFFB3E5FC)) }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = Color(0xFF0A1929),
@@ -156,14 +181,77 @@ fun GridScreen(viewModel: FreezerViewModel = viewModel()) {
         }
     }
 
+    if (showTilePicker) {
+        AlertDialog(
+            onDismissRequest = { showTilePicker = false },
+            title = { Text("Set up Quick Settings") },
+            text = {
+                Column {
+                    Text("Choose an app to unfreeze from the Freezer tile in your phone’s Quick Settings.")
+                    Spacer(Modifier.height(12.dp))
+                    if (selectedApps.isEmpty()) Text("Freeze an app first.")
+                    else LazyVerticalGrid(columns = GridCells.Fixed(1), modifier = Modifier.height(240.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(selectedApps, key = { it.packageName }) { app ->
+                            AppListRow(app = app, onClick = {
+                                appContext.getSharedPreferences(ShortcutTarget.PREFS, android.content.Context.MODE_PRIVATE).edit().putString(ShortcutTarget.TILE_KEY, app.packageName).apply()
+                                ShortcutTarget.refresh(appContext)
+                                showTilePicker = false
+                                tileSetupApp = app
+                            })
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showTilePicker = false }) { Text("Close") } }
+        )
+    }
+
+    tileSetupApp?.let { app ->
+        AlertDialog(
+            onDismissRequest = { tileSetupApp = null },
+            title = { Text("${app.appName} selected") },
+            text = { Text("The Freezer tile is set to unfreeze ${app.appName}. Add Freezer to your phone’s Quick Settings, then tap the tile to unfreeze it. If it is already added, just tap the tile there.") },
+            confirmButton = {
+                if (android.os.Build.VERSION.SDK_INT >= 33) {
+                    TextButton(onClick = {
+                        val manager = appContext.getSystemService(android.app.StatusBarManager::class.java)
+                        manager.requestAddTileService(
+                            android.content.ComponentName(appContext, FreezerTile::class.java),
+                            "Freezer",
+                            android.graphics.drawable.Icon.createWithResource(appContext, R.mipmap.ic_launcher),
+                            appContext.mainExecutor
+                        ) { result ->
+                            val message = when (result) {
+                                android.app.StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED -> "Freezer tile added to Quick Settings."
+                                android.app.StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED -> "Freezer tile is already in Quick Settings."
+                                else -> "Add Freezer from your phone’s Quick Settings editor."
+                            }
+                            scope.launch { snackbarHostState.showSnackbar(message) }
+                        }
+                        tileSetupApp = null
+                    }) { Text("Add tile") }
+                }
+            },
+            dismissButton = { TextButton(onClick = { tileSetupApp = null }) { Text("Done") } }
+        )
+    }
+
     if (showPicker) {
         AppPickerDialog(
             viewModel = viewModel,
             onDismiss = { showPicker = false },
-            onAppSelected = { app ->
-                viewModel.selectApp(app)
-                showPicker = false
-            }
+            onAppsSelected = { apps -> viewModel.selectApps(apps) }
+        )
+    }
+
+    val fallbackApp by viewModel.fallbackApp.collectAsState()
+    fallbackApp?.let { app ->
+        AlertDialog(
+            onDismissRequest = { viewModel.resolveFallback(false) },
+            title = { Text("Could not keep ${app.appName} visible") },
+            text = { Text("Suspension was unavailable. Disable this app instead? Its launcher icon may disappear or move.") },
+            confirmButton = { TextButton(onClick = { viewModel.resolveFallback(true) }) { Text("Disable app") } },
+            dismissButton = { TextButton(onClick = { viewModel.resolveFallback(false) }) { Text("Cancel") } }
         )
     }
 
@@ -388,7 +476,7 @@ fun FrozenAppSlot(
 
     val shatterProgress by animateFloatAsState(
         targetValue = if (isShattering) 1f else 0f,
-        animationSpec = tween(durationMillis = 550, easing = FastOutLinearInEasing),
+        animationSpec = tween(durationMillis = 800, easing = FastOutLinearInEasing),
         label = "shatter_progress",
         finishedListener = { value ->
             if (value >= 1f) onShatterEnd()
@@ -439,6 +527,27 @@ fun FrozenAppSlot(
             }
         }
 
+        Canvas(Modifier.fillMaxSize().graphicsLayer { alpha = effectiveAlpha; scaleX = effectiveScale; scaleY = effectiveScale }) {
+            val r = CornerRadius(16.dp.toPx())
+            drawRoundRect(
+                brush = Brush.linearGradient(listOf(Color.White.copy(alpha = .25f), Color(0xFF81D7F2).copy(alpha = .05f), Color(0xFFC5F6FF).copy(alpha = .24f))),
+                cornerRadius = r
+            )
+            drawRoundRect(color = Color(0xFFBDEFFF).copy(alpha = .8f), cornerRadius = r,
+                style = Stroke(width = 2.dp.toPx()))
+            drawRoundRect(color = Color.White.copy(alpha = .30f),
+                topLeft = Offset(4.dp.toPx(), 4.dp.toPx()),
+                size = Size(size.width - 8.dp.toPx(), size.height - 8.dp.toPx()),
+                cornerRadius = CornerRadius(12.dp.toPx()), style = Stroke(width = 1.dp.toPx()))
+            val frost = Path().apply {
+                moveTo(size.width * .08f, size.height * .23f)
+                lineTo(size.width * .13f, size.height * .10f)
+                lineTo(size.width * .39f, size.height * .08f)
+            }
+            drawPath(frost, Color.White.copy(alpha = .8f), style = Stroke(width = 2.dp.toPx()))
+            drawLine(Color.White.copy(alpha = .45f), Offset(size.width * .68f, size.height * .90f),
+                Offset(size.width * .89f, size.height * .83f), strokeWidth = 1.5.dp.toPx())
+        }
         if (isShattering) {
             ShatterOverlay(progress = shatterProgress)
         }
@@ -448,38 +557,32 @@ fun FrozenAppSlot(
 @Composable
 fun ShatterOverlay(progress: Float) {
     Canvas(modifier = Modifier.fillMaxSize()) {
-        val cx = size.width / 2f
-        val cy = size.height / 2f
-
-        val shards = listOf(
-            Triple(-1.2f, -0.8f, 0.7f),
-            Triple(1.1f, -1.0f, 0.6f),
-            Triple(-1.0f, 1.1f, 0.8f),
-            Triple(1.2f, 0.9f, 0.65f),
-            Triple(0f, -1.4f, 0.5f),
-            Triple(0f, 1.3f, 0.55f),
-            Triple(-1.4f, 0f, 0.6f),
-            Triple(1.4f, 0f, 0.7f)
-        )
-
-        val maxDistance = size.minDimension * 0.7f
-        val shardSize = size.minDimension * 0.18f
-
-        shards.forEach { (dx, dy, sizeMultiplier) ->
-            val px = cx + dx * maxDistance * progress
-            val py = cy + dy * maxDistance * progress
-            val s = shardSize * sizeMultiplier * (1f - progress * 0.4f)
-            val shardAlpha = (1f - progress).coerceIn(0f, 1f)
-
-            drawPath(
-                path = androidx.compose.ui.graphics.Path().apply {
-                    moveTo(px, py - s)
-                    lineTo(px + s * 0.7f, py + s * 0.5f)
-                    lineTo(px - s * 0.7f, py + s * 0.5f)
-                    close()
-                },
-                color = Color(0xFFB3E5FC).copy(alpha = shardAlpha)
-            )
+        val center = Offset(size.width / 2f, size.height / 2f)
+        val fade = (1f - progress).coerceIn(0f, 1f)
+        val distance = size.minDimension * progress
+        // Soft expanding clouds give the shards a frosty burst.
+        for (i in 0 until 7) {
+            val angle = i * (Math.PI * 2 / 7)
+            val cloudCenter = center + Offset(kotlin.math.cos(angle).toFloat(), kotlin.math.sin(angle).toFloat()) * (distance * .58f)
+            val radius = size.minDimension * (.12f + progress * .32f)
+            drawCircle(brush = Brush.radialGradient(
+                colors = listOf(Color(0xFFE5FBFF).copy(alpha = fade * .35f), Color(0xFFB3ECFF).copy(alpha = 0f)),
+                center = cloudCenter, radius = radius
+            ), radius = radius, center = cloudCenter)
+        }
+        for (i in 0 until 12) {
+            val angle = i * (Math.PI * 2 / 12) + if (i % 2 == 0) .12 else -.08
+            val direction = Offset(kotlin.math.cos(angle).toFloat(), kotlin.math.sin(angle).toFloat())
+            val point = center + direction * (distance * if (i % 2 == 0) 1.1f else .75f)
+            val shard = size.minDimension * (if (i % 2 == 0) .14f else .09f) * (1f - progress * .35f)
+            val path = Path().apply {
+                moveTo(point.x + direction.x * shard, point.y + direction.y * shard)
+                lineTo(point.x - direction.y * shard * .55f, point.y + direction.x * shard * .55f)
+                lineTo(point.x - direction.x * shard * .6f + direction.y * shard * .3f, point.y - direction.y * shard * .6f - direction.x * shard * .3f)
+                close()
+            }
+            drawPath(path, Color(0xFFBEF4FF).copy(alpha = fade * .9f))
+            drawPath(path, Color.White.copy(alpha = fade), style = Stroke(width = 1.dp.toPx()))
         }
     }
 }
@@ -585,54 +688,84 @@ fun UnfreezeDialog(
 fun AppPickerDialog(
     viewModel: FreezerViewModel,
     onDismiss: () -> Unit,
-    onAppSelected: (InstalledApp) -> Unit
+    onAppsSelected: (List<InstalledApp>) -> Unit
 ) {
     val installedApps by viewModel.installedApps.collectAsState()
+    val frozenApps by viewModel.selectedApps.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
-    val context = LocalContext.current
+    val isFreezing by viewModel.isFreezing.collectAsState()
+    var chosen by remember { mutableStateOf(setOf<String>()) }
+    var search by remember { mutableStateOf("") }
+    val remaining = (16 - frozenApps.size).coerceAtLeast(0)
+    val frozenIds = frozenApps.map { it.packageName }.toSet()
+    LaunchedEffect(frozenIds) { chosen = chosen - frozenIds }
 
     LaunchedEffect(Unit) {
         viewModel.loadInstalledApps()
     }
 
-    Dialog(onDismissRequest = onDismiss) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(20.dp))
-                .background(Color(0xFF13293D))
-                .padding(16.dp)
+    Dialog(onDismissRequest = { if (!isFreezing) onDismiss() }) {
+        Column(
+            modifier = Modifier.fillMaxWidth().fillMaxHeight(0.85f)
+                .clip(RoundedCornerShape(20.dp)).background(Color(0xFF13293D)).padding(16.dp)
         ) {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    text = "Choose an app to freeze",
-                    color = Color(0xFFB3E5FC),
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(bottom = 12.dp)
-                )
-
-                if (isLoading) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(200.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator(color = Color(0xFFB3E5FC))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Choose apps to freeze", color = Color(0xFFB3E5FC), fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                IconButton(onClick = onDismiss, enabled = !isFreezing,
+                    modifier = Modifier.semantics { contentDescription = "Close app picker" }) {
+                    Text("×", color = Color(0xFFB3E5FC), fontSize = 30.sp)
+                }
+            }
+            OutlinedTextField(
+                value = search, onValueChange = { search = it },
+                label = { Text("Search apps") }, singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = Color.White, unfocusedTextColor = Color.White,
+                    focusedLabelColor = Color(0xFFB3E5FC), unfocusedLabelColor = Color(0xFF88B0C4),
+                    focusedBorderColor = Color(0xFFB3E5FC), unfocusedBorderColor = Color(0xFF4A90A4),
+                    cursorColor = Color(0xFFB3E5FC)
+                ),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
+            )
+            Text("${chosen.size} selected · $remaining slots available", color = Color(0xFFB3E5FC), fontSize = 13.sp)
+            Spacer(Modifier.height(8.dp))
+            if (isLoading) {
+                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = Color(0xFFB3E5FC))
+                }
+            } else {
+                val matches = installedApps.filter { it.packageName !in frozenIds && (it.appName.contains(search, ignoreCase = true) || it.packageName.contains(search, ignoreCase = true)) }
+                if (matches.isEmpty()) {
+                    Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                        Text("No apps found", color = Color(0xFF88B0C4))
                     }
-                } else {
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(1),
-                        modifier = Modifier.height(400.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        items(installedApps, key = { it.packageName }) { app ->
-                            AppListRow(app = app, onClick = { onAppSelected(app) })
+                } else LazyVerticalGrid(
+                    columns = GridCells.Fixed(1), modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    items(matches, key = { it.packageName }) { app ->
+                        val checked = app.packageName in chosen
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = checked, enabled = !isFreezing && (checked || chosen.count { it !in frozenIds } < remaining), onCheckedChange = {
+                                chosen = if (it) chosen + app.packageName else chosen - app.packageName
+                            })
+                            AppListRow(app = app, onClick = {
+                                if (!isFreezing && (checked || chosen.count { it !in frozenIds } < remaining)) {
+                                    chosen = if (checked) chosen - app.packageName else chosen + app.packageName
+                                }
+                            })
                         }
                     }
                 }
             }
+            Spacer(Modifier.height(12.dp))
+            Button(
+                enabled = chosen.isNotEmpty() && !isFreezing,
+                onClick = { onAppsSelected(installedApps.filter { it.packageName in chosen && it.packageName !in frozenIds }) },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF84D8F5), contentColor = Color(0xFF082238), disabledContainerColor = Color(0xFF294758), disabledContentColor = Color(0xFF90AAB8)),
+                modifier = Modifier.fillMaxWidth().height(52.dp)
+            ) { Text(if (isFreezing) "Freezing…" else if (chosen.isEmpty()) "Select apps to freeze" else "Freeze ${chosen.size} selected", fontWeight = FontWeight.Bold) }
         }
     }
 }

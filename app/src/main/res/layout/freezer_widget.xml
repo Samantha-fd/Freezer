@@ -1,0 +1,1 @@
+<TextView xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/widget_text" android:layout_width="match_parent" android:layout_height="match_parent" android:gravity="center" android:background="#13293D" android:textColor="#B3E5FC" android:padding="12dp" android:text="Freezer" />

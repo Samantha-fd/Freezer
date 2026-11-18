@@ -11,10 +11,10 @@ class AppRepository(private val context: Context) {
         "com.google.android.gms",
         "com.android.vending",
         "com.google.android.gsf",
-        "com.google.android.package installer",
+        "com.google.android.packageinstaller",
 
         // System UI and core device functions
-        "com.android.system ui",
+        "com.android.systemui",
         "com.android.settings",
         "com.android.phone",
         "com.android.dialer",
@@ -71,7 +71,10 @@ class AppRepository(private val context: Context) {
 
     private fun isLauncher(appInfo: ApplicationInfo): Boolean {
         val packageName = appInfo.packageName
-        return packageName.contains("launcher", ignoreCase = true) ||
-                packageName.contains("home", ignoreCase = true)
+        val homeIntent = android.content.Intent(android.content.Intent.ACTION_MAIN)
+            .addCategory(android.content.Intent.CATEGORY_HOME)
+        val homePackages = context.packageManager.queryIntentActivities(homeIntent, 0)
+            .map { it.activityInfo.packageName }
+        return packageName in homePackages || packageName.contains("launcher", ignoreCase = true)
     }
 }

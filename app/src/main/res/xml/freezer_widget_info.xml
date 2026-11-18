@@ -1,0 +1,1 @@
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android" android:minWidth="110dp" android:minHeight="48dp" android:initialLayout="@layout/freezer_widget" android:configure="com.juneapps.freezer.WidgetConfigActivity" android:resizeMode="horizontal|vertical" android:widgetCategory="home_screen" />

@@ -5,13 +5,14 @@ import rikka.shizuku.Shizuku
 import rikka.shizuku.ShizukuBinderWrapper
 import rikka.shizuku.SystemServiceHelper
 
-class FreezeRepository {
+class FreezeRepository(private val context: android.content.Context) {
 
     sealed class FreezeResult {
         data object Success : FreezeResult()
         data object PermissionDenied : FreezeResult()
         data object ShizukuNotRunning : FreezeResult()
         data class Error(val message: String) : FreezeResult()
+        data class Indeterminate(val message: String) : FreezeResult()
     }
 
     fun isShizukuReady(): Boolean {
@@ -31,12 +32,47 @@ class FreezeRepository {
         }
     }
 
-    fun freezeApp(packageName: String): FreezeResult {
-        return setEnabledState(packageName, enabled = false)
+    fun freezeApp(packageName: String): FreezeResult = suspendApp(packageName, true)
+
+    fun disableApp(packageName: String): FreezeResult = setEnabledState(packageName, false)
+
+    fun unfreezeApp(packageName: String, method: String = "disabled"): FreezeResult =
+        if (method == "suspended") suspendApp(packageName, false) else setEnabledState(packageName, true)
+
+    fun isSuspended(packageName: String): Boolean {
+        val info = context.packageManager.getApplicationInfo(packageName, android.content.pm.PackageManager.MATCH_DISABLED_COMPONENTS)
+        return info.flags and android.content.pm.ApplicationInfo.FLAG_SUSPENDED != 0
     }
 
-    fun unfreezeApp(packageName: String): FreezeResult {
-        return setEnabledState(packageName, enabled = true)
+    private fun suspendApp(packageName: String, suspend: Boolean): FreezeResult {
+        if (!isShizukuReady()) return FreezeResult.ShizukuNotRunning
+        if (!hasPermission()) return FreezeResult.PermissionDenied
+        if (!packageName.matches(Regex("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+"))) {
+            return FreezeResult.Error("Invalid package name")
+        }
+        var safeToOfferFallback = false
+        return try {
+            if (suspend && isSuspended(packageName)) {
+                return FreezeResult.Indeterminate("This app is already suspended outside Freezer.")
+            }
+            safeToOfferFallback = suspend
+            val method = Shizuku::class.java.getDeclaredMethod(
+                "newProcess", Array<String>::class.java, Array<String>::class.java, String::class.java
+            ).apply { isAccessible = true }
+            val userId = android.os.Process.myUid() / 100000
+            val command = arrayOf("pm", if (suspend) "suspend" else "unsuspend", "--user", userId.toString(), packageName)
+            safeToOfferFallback = false
+            val process = method.invoke(null, command, null, null) as Process
+            val output = process.inputStream.bufferedReader().use { it.readText() }
+            val errors = process.errorStream.bufferedReader().use { it.readText() }
+            val exit = process.waitFor()
+            val actual = isSuspended(packageName)
+            if (actual == suspend) FreezeResult.Success
+            else FreezeResult.Error((errors.ifBlank { output }).ifBlank { "Could not change suspension state (exit $exit)" }.trim())
+        } catch (e: Exception) {
+            if (safeToOfferFallback) FreezeResult.Error("Suspension is unavailable: ${e.cause?.message ?: e.message}")
+            else FreezeResult.Indeterminate("Could not verify suspension state: ${e.cause?.message ?: e.message}. Check the app before trying again.")
+        }
     }
 
     private fun setEnabledState(packageName: String, enabled: Boolean): FreezeResult {

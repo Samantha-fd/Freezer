@@ -10,7 +10,8 @@ import kotlinx.serialization.encodeToString
 data class FrozenAppRecord(
     val packageName: String,
     val appName: String,
-    val frozenAt: Long
+    val frozenAt: Long,
+    val method: String = "disabled"
 )
 
 class FrozenAppsStore(context: Context) {

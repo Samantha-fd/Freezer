@@ -13,7 +13,7 @@ import kotlinx.coroutines.withContext
 class FreezerViewModel(application: Application) : AndroidViewModel(application) {
 
     private val appRepository = AppRepository(application)
-    private val freezeRepository = FreezeRepository()
+    private val freezeRepository = FreezeRepository(application)
 
     private val frozenAppsStore = FrozenAppsStore(application)
     private val _installedApps = MutableStateFlow<List<InstalledApp>>(emptyList())
@@ -43,40 +43,35 @@ class FreezerViewModel(application: Application) : AndroidViewModel(application)
         data class Error(val text: String) : UiMessage()
     }
 
+    private val restoreJob = viewModelScope.launch { restoreFrozenApps() }
+
     init {
         _showOnboarding.value = !frozenAppsStore.isOnboardingComplete()
-        restoreFrozenApps()
     }
 
-    private fun restoreFrozenApps() {
-        viewModelScope.launch {
+    private suspend fun restoreFrozenApps() {
+        kotlinx.coroutines.coroutineScope {
             val records = withContext(Dispatchers.IO) {
                 frozenAppsStore.loadFrozenApps()
             }
             val packageManager = getApplication<Application>().packageManager
             val restored = records.mapNotNull { record ->
                 try {
-                    val info = packageManager.getApplicationInfo(record.packageName, 0)
-                    val isActuallyFrozen = withContext(Dispatchers.IO) {
-                        freezeRepository.isAppFrozen(record.packageName)
-                    }
-                    if (!isActuallyFrozen) return@mapNotNull null
+                    val info = packageManager.getApplicationInfo(
+                        record.packageName, android.content.pm.PackageManager.MATCH_DISABLED_COMPONENTS
+                    )
                     InstalledApp(
                         packageName = record.packageName,
                         appName = record.appName,
                         icon = packageManager.getApplicationIcon(info),
                         isSystemApp = false
                     )
-                } catch (_: Exception) {
+                } catch (_: android.content.pm.PackageManager.NameNotFoundException) {
                     null
                 }
             }
             _selectedApps.value = restored
-            val survivingPackages = restored.map { it.packageName }.toSet()
-            withContext(Dispatchers.IO) {
-                val updatedRecords = records.filter { it.packageName in survivingPackages }
-                frozenAppsStore.saveFrozenApps(updatedRecords)
-            }
+
         }
     }
 
@@ -89,7 +84,30 @@ class FreezerViewModel(application: Application) : AndroidViewModel(application)
             }
             val permission = withContext(Dispatchers.IO) { freezeRepository.hasPermission() }
             _shizukuStatus.value = if (permission) ShizukuStatus.READY else ShizukuStatus.NEEDS_PERMISSION
+            if (permission) {
+                restoreJob.join()
+                reconcileFrozenApps()
+            }
         }
+    }
+
+    private suspend fun reconcileFrozenApps() {
+        val records = frozenAppsStore.loadFrozenApps()
+        val pm = getApplication<Application>().packageManager
+        for (record in records) {
+            val frozen = withContext(Dispatchers.IO) {
+                try {
+                    if (record.method == "suspended") freezeRepository.isSuspended(record.packageName)
+                    else pm.getApplicationEnabledSetting(record.packageName) == android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER
+                } catch (_: Exception) { null }
+            }
+            // A query error is not evidence that an app was unfrozen.
+            if (frozen == false && frozenAppsStore.loadFrozenApps().contains(record)) {
+                frozenAppsStore.removeFrozenApp(record.packageName)
+                _selectedApps.value = _selectedApps.value.filterNot { it.packageName == record.packageName }
+            }
+        }
+        ShortcutTarget.refresh(getApplication())
     }
 
     fun loadInstalledApps() {
@@ -103,17 +121,79 @@ class FreezerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun selectApp(app: InstalledApp) {
-        val current = _selectedApps.value
-        if (current.any { it.packageName == app.packageName }) return
-        if (current.size >= 16) return
+    private val _fallbackApp = MutableStateFlow<InstalledApp?>(null)
+    val fallbackApp: StateFlow<InstalledApp?> = _fallbackApp.asStateFlow()
+    private val _failedAppIds = MutableStateFlow<Set<String>>(emptySet())
+    val failedAppIds: StateFlow<Set<String>> = _failedAppIds.asStateFlow()
+    private val _isFreezing = MutableStateFlow(false)
+    val isFreezing: StateFlow<Boolean> = _isFreezing.asStateFlow()
+    private val fallbackQueue = ArrayDeque<InstalledApp>()
 
+    fun selectApps(apps: List<InstalledApp>) {
+        if (_isFreezing.value || _fallbackApp.value != null) return
         viewModelScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                freezeRepository.freezeApp(app.packageName)
+            _isFreezing.value = true
+            _failedAppIds.value = emptySet()
+            var successCount = 0
+            val errors = mutableListOf<String>()
+            for (app in apps) {
+                if (_selectedApps.value.any { it.packageName == app.packageName }) continue
+                if (frozenAppsStore.loadFrozenApps().size >= 16) {
+                    _failedAppIds.value += app.packageName
+                    continue
+                }
+                when (val result = withContext(Dispatchers.IO) { freezeRepository.freezeApp(app.packageName) }) {
+                    is FreezeRepository.FreezeResult.Success -> {
+                        recordFrozen(app, "suspended")
+                        successCount++
+                    }
+                    is FreezeRepository.FreezeResult.Error -> {
+                        _failedAppIds.value += app.packageName
+                        fallbackQueue.addLast(app)
+                    }
+                    else -> {
+                        _failedAppIds.value += app.packageName
+                        val reason = when (result) {
+                            is FreezeRepository.FreezeResult.Indeterminate -> result.message
+                            is FreezeRepository.FreezeResult.PermissionDenied -> "Shizuku permission required"
+                            is FreezeRepository.FreezeResult.ShizukuNotRunning -> "Shizuku is not running"
+                            else -> "Unable to freeze"
+                        }
+                        errors += "${app.appName}: $reason"
+                    }
+                }
             }
-            handleFreezeResult(result, app, isFreeze = true)
+            _isFreezing.value = false
+            _lastResult.value = if (errors.isNotEmpty()) UiMessage.Error("$successCount frozen. ${errors.joinToString("; ")}")
+                else if (successCount > 0) UiMessage.Info("$successCount app(s) frozen") else null
+            showNextFallback()
         }
+    }
+
+    private fun showNextFallback() {
+        _fallbackApp.value = if (fallbackQueue.isEmpty()) null else fallbackQueue.removeFirst()
+    }
+
+    fun resolveFallback(disable: Boolean) {
+        val app = _fallbackApp.value ?: return
+        _fallbackApp.value = null
+        viewModelScope.launch {
+            if (disable && frozenAppsStore.loadFrozenApps().size < 16) {
+                val result = withContext(Dispatchers.IO) { freezeRepository.disableApp(app.packageName) }
+                if (result is FreezeRepository.FreezeResult.Success) {
+                    recordFrozen(app, "disabled")
+                    _failedAppIds.value -= app.packageName
+                    _lastResult.value = UiMessage.Info("${app.appName} frozen")
+                } else handleFreezeResult(result, app, true)
+            }
+            showNextFallback()
+        }
+    }
+
+    private fun recordFrozen(app: InstalledApp, method: String) {
+        frozenAppsStore.addFrozenApp(FrozenAppRecord(app.packageName, app.appName, System.currentTimeMillis(), method))
+        _selectedApps.value = _selectedApps.value + app
+        ShortcutTarget.refresh(getApplication())
     }
 
     private val _shatteringAppIds = MutableStateFlow<Set<String>>(emptySet())
@@ -122,16 +202,50 @@ class FreezerViewModel(application: Application) : AndroidViewModel(application)
     fun removeApp(app: InstalledApp) {
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
-                freezeRepository.unfreezeApp(app.packageName)
+                val method = frozenAppsStore.loadFrozenApps().firstOrNull { it.packageName == app.packageName }?.method ?: "disabled"
+                freezeRepository.unfreezeApp(app.packageName, method)
             }
             if (result is FreezeRepository.FreezeResult.Success) {
                 _shatteringAppIds.value = _shatteringAppIds.value + app.packageName
-                viewModelScope.launch(Dispatchers.IO) {
-                    frozenAppsStore.removeFrozenApp(app.packageName)
-                }
+                frozenAppsStore.removeFrozenApp(app.packageName)
+                ShortcutTarget.refresh(getApplication())
                 _lastResult.value = UiMessage.Info("${app.appName} unfrozen")
             } else {
                 handleFreezeResult(result, app, isFreeze = false)
+            }
+        }
+    }
+
+    fun unfreezeShortcut(packageName: String) {
+        viewModelScope.launch {
+            restoreJob.join()
+            repeat(10) {
+                if (!freezeRepository.isShizukuReady()) kotlinx.coroutines.delay(200)
+            }
+            val record = frozenAppsStore.loadFrozenApps().firstOrNull { it.packageName == packageName }
+            if (record == null) {
+                _lastResult.value = UiMessage.Error("That app is no longer frozen.")
+                ShortcutTarget.refresh(getApplication())
+                return@launch
+            }
+            val result = withContext(Dispatchers.IO) { freezeRepository.unfreezeApp(record.packageName, record.method) }
+            if (result is FreezeRepository.FreezeResult.Success) {
+                frozenAppsStore.removeFrozenApp(record.packageName)
+                if (_selectedApps.value.any { it.packageName == record.packageName }) {
+                    _shatteringAppIds.value = _shatteringAppIds.value + record.packageName
+                } else {
+                    _selectedApps.value = _selectedApps.value.filterNot { it.packageName == record.packageName }
+                }
+                _lastResult.value = UiMessage.Info("${record.appName} unfrozen")
+                ShortcutTarget.refresh(getApplication())
+            } else {
+                _lastResult.value = UiMessage.Error(when (result) {
+                    is FreezeRepository.FreezeResult.PermissionDenied -> "Shizuku permission required."
+                    is FreezeRepository.FreezeResult.ShizukuNotRunning -> "Start Shizuku first."
+                    is FreezeRepository.FreezeResult.Error -> result.message
+                    is FreezeRepository.FreezeResult.Indeterminate -> result.message
+                    else -> "Could not unfreeze app."
+                })
             }
         }
     }
@@ -180,6 +294,9 @@ class FreezerViewModel(application: Application) : AndroidViewModel(application)
                 _lastResult.value = UiMessage.Error("Shizuku permission required.")
             }
             is FreezeRepository.FreezeResult.Error -> {
+                _lastResult.value = UiMessage.Error(result.message)
+            }
+            is FreezeRepository.FreezeResult.Indeterminate -> {
                 _lastResult.value = UiMessage.Error(result.message)
             }
         }
