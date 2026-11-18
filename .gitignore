@@ -45,7 +45,12 @@ captures/
 # Never commit signing keys
 *.jks
 *.keystore
+*.p12
+*.pfx
+freezer-release
+Keystores/
 keystore.properties
+signing.properties
 
 # External native build folder generated in Android Studio 2.2 and later
 .externalNativeBuild
