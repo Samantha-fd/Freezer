@@ -8,8 +8,6 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
-import android.service.quicksettings.Tile
-import android.service.quicksettings.TileService
 import android.widget.RemoteViews
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -25,13 +23,11 @@ object ShortcutTarget {
     var pending: String? = null
     const val EXTRA_PACKAGE = "target_package"
     const val PREFS = "shortcut_targets"
-    const val TILE_KEY = "tile_target"
     fun widgetKey(id: Int) = "widget_$id"
     fun refresh(context: Context) {
         val manager = AppWidgetManager.getInstance(context)
         val ids = manager.getAppWidgetIds(ComponentName(context, FreezerWidget::class.java))
         FreezerWidget.update(context, manager, ids)
-        TileService.requestListeningState(context, ComponentName(context, FreezerTile::class.java))
     }
 }
 
@@ -94,28 +90,5 @@ class WidgetConfigActivity : ComponentActivity() {
                 }
             }
         }
-    }
-}
-
-class FreezerTile : TileService() {
-    override fun onStartListening() {
-        super.onStartListening()
-        val target = getSharedPreferences(ShortcutTarget.PREFS, Context.MODE_PRIVATE).getString(ShortcutTarget.TILE_KEY, null)
-        val record = FrozenAppsStore(this).loadFrozenApps().firstOrNull { it.packageName == target }
-        qsTile?.apply {
-            label = record?.let { "Unfreeze ${it.appName}" } ?: "Choose app in Freezer"
-            state = if (record != null) Tile.STATE_INACTIVE else Tile.STATE_UNAVAILABLE
-            updateTile()
-        }
-    }
-    @android.annotation.SuppressLint("StartActivityAndCollapseDeprecated")
-    @Suppress("DEPRECATION")
-    override fun onClick() {
-        super.onClick()
-        val target = getSharedPreferences(ShortcutTarget.PREFS, Context.MODE_PRIVATE).getString(ShortcutTarget.TILE_KEY, null) ?: return
-        if (FrozenAppsStore(this).loadFrozenApps().none { it.packageName == target }) return
-        val intent = Intent(this, ShortcutActivity::class.java).putExtra(ShortcutTarget.EXTRA_PACKAGE, target).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        if (android.os.Build.VERSION.SDK_INT >= 34) startActivityAndCollapse(PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
-        else startActivityAndCollapse(intent)
     }
 }

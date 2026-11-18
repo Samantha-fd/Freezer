@@ -74,7 +74,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.animation.core.FastOutLinearInEasing
-import kotlinx.coroutines.launch
 
 private sealed class GridItem {
     data class App(val app: InstalledApp) : GridItem()
@@ -93,10 +92,6 @@ fun GridScreen(viewModel: FreezerViewModel = viewModel(), lockEnabled: Boolean =
     val showOnboarding by viewModel.showOnboarding.collectAsState()
 
     var showPicker by remember { mutableStateOf(false) }
-    var showTilePicker by remember { mutableStateOf(false) }
-    var tileSetupApp by remember { mutableStateOf<InstalledApp?>(null) }
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
-    val appContext = LocalContext.current
     var appPendingRemoval by remember { mutableStateOf<InstalledApp?>(null) }
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -123,7 +118,6 @@ fun GridScreen(viewModel: FreezerViewModel = viewModel(), lockEnabled: Boolean =
                     Text(text = "Freezer", fontWeight = FontWeight.Bold)
                 },
                 actions = {
-                    TextButton(onClick = { showTilePicker = true }) { Text("Tile", color = Color(0xFFB3E5FC)) }
                     TextButton(onClick = onToggleLock) { Text(if (lockEnabled) "Unlock setting" else "App lock", color = Color(0xFFB3E5FC)) }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -179,61 +173,6 @@ fun GridScreen(viewModel: FreezerViewModel = viewModel(), lockEnabled: Boolean =
                 }
             }
         }
-    }
-
-    if (showTilePicker) {
-        AlertDialog(
-            onDismissRequest = { showTilePicker = false },
-            title = { Text("Set up Quick Settings") },
-            text = {
-                Column {
-                    Text("Choose an app to unfreeze from the Freezer tile in your phone’s Quick Settings.")
-                    Spacer(Modifier.height(12.dp))
-                    if (selectedApps.isEmpty()) Text("Freeze an app first.")
-                    else LazyVerticalGrid(columns = GridCells.Fixed(1), modifier = Modifier.height(240.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(selectedApps, key = { it.packageName }) { app ->
-                            AppListRow(app = app, onClick = {
-                                appContext.getSharedPreferences(ShortcutTarget.PREFS, android.content.Context.MODE_PRIVATE).edit().putString(ShortcutTarget.TILE_KEY, app.packageName).apply()
-                                ShortcutTarget.refresh(appContext)
-                                showTilePicker = false
-                                tileSetupApp = app
-                            })
-                        }
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { showTilePicker = false }) { Text("Close") } }
-        )
-    }
-
-    tileSetupApp?.let { app ->
-        AlertDialog(
-            onDismissRequest = { tileSetupApp = null },
-            title = { Text("${app.appName} selected") },
-            text = { Text("The Freezer tile is set to unfreeze ${app.appName}. Add Freezer to your phone’s Quick Settings, then tap the tile to unfreeze it. If it is already added, just tap the tile there.") },
-            confirmButton = {
-                if (android.os.Build.VERSION.SDK_INT >= 33) {
-                    TextButton(onClick = {
-                        val manager = appContext.getSystemService(android.app.StatusBarManager::class.java)
-                        manager.requestAddTileService(
-                            android.content.ComponentName(appContext, FreezerTile::class.java),
-                            "Freezer",
-                            android.graphics.drawable.Icon.createWithResource(appContext, R.mipmap.ic_launcher),
-                            appContext.mainExecutor
-                        ) { result ->
-                            val message = when (result) {
-                                android.app.StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED -> "Freezer tile added to Quick Settings."
-                                android.app.StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED -> "Freezer tile is already in Quick Settings."
-                                else -> "Add Freezer from your phone’s Quick Settings editor."
-                            }
-                            scope.launch { snackbarHostState.showSnackbar(message) }
-                        }
-                        tileSetupApp = null
-                    }) { Text("Add tile") }
-                }
-            },
-            dismissButton = { TextButton(onClick = { tileSetupApp = null }) { Text("Done") } }
-        )
     }
 
     if (showPicker) {
@@ -300,7 +239,7 @@ fun OnboardingScreen(onDismiss: () -> Unit) {
             )
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                text = "Disable apps without uninstalling them. Save battery and stop notifications without losing your data.",
+                text = "Pause apps without uninstalling them. Notifications are hidden, but background activity may continue. Battery savings have not been measured.",
                 color = Color(0xFF88B0C4),
                 fontSize = 14.sp,
                 textAlign = TextAlign.Center,
@@ -650,7 +589,7 @@ fun UnfreezeDialog(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "This will re-enable the app.",
+                    text = "This will make the app available again.",
                     color = Color(0xFF88B0C4),
                     fontSize = 13.sp
                 )

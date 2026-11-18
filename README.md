@@ -1,18 +1,19 @@
 # Freezer
 
-An Android app freezer that disables apps at the OS level without uninstalling them. Uses [Shizuku](https://shizuku.rikka.app/) for privileged access — no root required.
+An Android app that pauses selected apps without uninstalling them. It uses [Shizuku](https://shizuku.rikka.app/) for privileged access — no root required.
 
-Frozen apps:
-- Stop running in the background
-- Stop receiving notifications
-- Stop draining battery
-- Keep all their data — restored instantly on unfreeze
+By default, Freezer suspends selected apps using Android's package manager. While suspended:
+
+- Their activities cannot be opened, and notifications are hidden.
+- Their icons generally remain visible, with an appearance controlled by the launcher.
+- Their data remains on the device and the apps can be unsuspended.
+- Background activity may continue, and battery savings have not been measured.
+
+If suspension is unavailable, Freezer can offer to disable the app after asking for confirmation. Disabling may remove or move its launcher icon.
 
 ## Why
 
-Most app freezers on the Play Store don't actually work. Android's security model only allows OS-level processes (or apps with root, device-owner, or ADB privileges) to disable other apps. Consumer freezer apps fake it with battery restrictions and force-stops that Android reverses within minutes.
-
-Freezer uses Shizuku as a privilege bridge to call Android's real `pm disable-user` API — the same mechanism the OS itself uses.
+Freezer provides a simple way to temporarily make distracting apps unavailable without uninstalling them. It uses Shizuku to request Android package suspension and, with confirmation when needed, disabling. These methods have different effects on launcher icons and background activity.
 
 ## Tech stack
 
@@ -25,10 +26,10 @@ Freezer uses Shizuku as a privilege bridge to call Android's real `pm disable-us
 ## Features
 
 - 4×4 grid UI with implicit add tile
-- Real OS-level freeze/unfreeze via Shizuku
+- Suspend and unsuspend apps through Shizuku, with an optional disable fallback
 - Frozen state survives app restart and device reboot
 - Syncs UI with OS truth-source on launch (handles external state changes)
-- Safety filters block dangerous targets (system apps, Google services, WebView, launchers, authenticators)
+- Safety filters exclude many sensitive targets, including known system packages and launchers
 - One-time first-launch onboarding
 - Smart Shizuku status banner with one-tap restart
 
@@ -42,8 +43,8 @@ Freezer uses Shizuku as a privilege bridge to call Android's real `pm disable-us
 
 ## Known limitations
 
-- **Battery savings are not yet measured.** Working on it — next phase wires up Android's `BatteryStats` API.
-- **App icon position resets after unfreeze.** When an app is disabled and re-enabled, your launcher treats it as a fresh install. Stock launchers (Pixel, Samsung) don't preserve original positions; some third-party launchers (Nova, Lawnchair) do.
+- **Battery savings are not yet measured.** Suspension does not guarantee that background activity stops.
+- **Launcher behavior varies.** Suspended apps usually stay visible, but launchers control their appearance. Disabled apps may disappear or lose their previous position when re-enabled.
 - **Shizuku must be restarted after every device reboot.** Inherent to non-rooted Shizuku.
 - **WhatsApp/messaging app callers see "ringing", not "unreachable".** Server-side state, outside any user-space freezer's control.
 - **Not on Play Store.** Google policy restricts apps in this category. Distributed via GitHub Releases.
@@ -58,6 +59,8 @@ cd freezer
 ```
 
 Requires Android Studio Hedgehog+, Android SDK 26+ for runtime, SDK 36 for build.
+
+For distribution, use `freezer-v<version>-release.apk` for a release-signed APK and `freezer-v<version>-debug.apk` for a debug-signed test build. Android updates require the same application ID and compatible signing certificate as the installed app. Keep the release signing key private and backed up.
 
 ## License
 
