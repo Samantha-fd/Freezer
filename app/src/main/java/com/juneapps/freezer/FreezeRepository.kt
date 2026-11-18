@@ -60,15 +60,38 @@ class FreezeRepository(private val context: android.content.Context) {
                 "newProcess", Array<String>::class.java, Array<String>::class.java, String::class.java
             ).apply { isAccessible = true }
             val userId = android.os.Process.myUid() / 100000
-            val command = arrayOf("pm", if (suspend) "suspend" else "unsuspend", "--user", userId.toString(), packageName)
-            safeToOfferFallback = false
-            val process = method.invoke(null, command, null, null) as Process
-            val output = process.inputStream.bufferedReader().use { it.readText() }
-            val errors = process.errorStream.bufferedReader().use { it.readText() }
-            val exit = process.waitFor()
-            val actual = isSuspended(packageName)
+            fun runCommand(withMessage: Boolean): Pair<Int, String> {
+                val command = buildList {
+                    add("pm")
+                    add(if (suspend) "suspend" else "unsuspend")
+                    add("--user")
+                    add(userId.toString())
+                    if (withMessage) {
+                        add("--dialogMessage")
+                        add("This app is frozen. Open Freezer to unfreeze it.")
+                    }
+                    add(packageName)
+                }.toTypedArray()
+                safeToOfferFallback = false
+                val process = method.invoke(null, command, null, null) as Process
+                val output = process.inputStream.bufferedReader().use { it.readText() }
+                val errors = process.errorStream.bufferedReader().use { it.readText() }
+                return process.waitFor() to listOf(output, errors).filter { it.isNotBlank() }.joinToString("\n")
+            }
+
+            var (exit, output) = runCommand(withMessage = suspend)
+            var actual = isSuspended(packageName)
+            // Older or modified Android versions may not implement this option.
+            // Retry only after confirming the first command did not suspend the app.
+            if (suspend && !actual && output.contains("Unknown option", ignoreCase = true) &&
+                output.contains("--dialogMessage", ignoreCase = true)) {
+                val result = runCommand(withMessage = false)
+                exit = result.first
+                output = result.second
+                actual = isSuspended(packageName)
+            }
             if (actual == suspend) FreezeResult.Success
-            else FreezeResult.Error((errors.ifBlank { output }).ifBlank { "Could not change suspension state (exit $exit)" }.trim())
+            else FreezeResult.Error(output.ifBlank { "Could not change suspension state (exit $exit)" }.trim())
         } catch (e: Exception) {
             if (safeToOfferFallback) FreezeResult.Error("Suspension is unavailable: ${e.cause?.message ?: e.message}")
             else FreezeResult.Indeterminate("Could not verify suspension state: ${e.cause?.message ?: e.message}. Check the app before trying again.")
