@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -53,6 +54,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asImageBitmap
@@ -436,7 +438,7 @@ fun FrozenAppSlot(
                 }
                 .clip(RoundedCornerShape(16.dp))
                 .background(Color(0xFF1E4D6B))
-                .clickable(enabled = !isShattering) { onClick() },
+                .clickable(enabled = !isShattering, onClickLabel = "Unfreeze ${app.appName}") { onClick() },
             contentAlignment = Alignment.Center
         ) {
             Column(
@@ -449,7 +451,7 @@ fun FrozenAppSlot(
                 }
                 Image(
                     bitmap = bitmap,
-                    contentDescription = app.appName,
+                    contentDescription = null,
                     modifier = Modifier
                         .fillMaxWidth(0.6f)
                         .aspectRatio(1f)
@@ -692,15 +694,15 @@ fun AppPickerDialog(
                 ) {
                     items(matches, key = { it.packageName }) { app ->
                         val checked = app.packageName in chosen
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(checked = checked, enabled = !isFreezing && (checked || chosen.count { it !in frozenIds } < remaining), onCheckedChange = {
+                        val enabled = !isFreezing && (checked || chosen.size < remaining)
+                        Row(
+                            modifier = Modifier.fillMaxWidth().toggleable(value = checked, enabled = enabled, role = Role.Checkbox) {
                                 chosen = if (it) chosen + app.packageName else chosen - app.packageName
-                            })
-                            AppListRow(app = app, onClick = {
-                                if (!isFreezing && (checked || chosen.count { it !in frozenIds } < remaining)) {
-                                    chosen = if (checked) chosen - app.packageName else chosen + app.packageName
-                                }
-                            })
+                            },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(checked = checked, enabled = enabled, onCheckedChange = null)
+                            AppListRow(app = app)
                         }
                     }
                 }
@@ -717,13 +719,12 @@ fun AppPickerDialog(
 }
 
 @Composable
-fun AppListRow(app: InstalledApp, onClick: () -> Unit) {
+fun AppListRow(app: InstalledApp) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(Color(0xFF0A1929))
-            .clickable { onClick() }
             .padding(12.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -732,7 +733,7 @@ fun AppListRow(app: InstalledApp, onClick: () -> Unit) {
             }
             Image(
                 bitmap = bitmap,
-                contentDescription = app.appName,
+                contentDescription = null,
                 modifier = Modifier
                     .height(40.dp)
                     .aspectRatio(1f)
@@ -749,7 +750,7 @@ fun AppListRow(app: InstalledApp, onClick: () -> Unit) {
                 )
                 Text(
                     text = app.packageName,
-                    color = Color(0xFF4A90A4),
+                    color = Color(0xFF9CC8DA),
                     fontSize = 11.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
