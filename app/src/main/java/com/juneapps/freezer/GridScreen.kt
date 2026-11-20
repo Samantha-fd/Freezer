@@ -633,6 +633,8 @@ fun AppPickerDialog(
     val frozenApps by viewModel.selectedApps.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val isFreezing by viewModel.isFreezing.collectAsState()
+    val failedIds by viewModel.failedAppIds.collectAsState()
+    val fallbackApp by viewModel.fallbackApp.collectAsState()
     var chosen by remember { mutableStateOf(setOf<String>()) }
     var search by remember { mutableStateOf("") }
     val remaining = (16 - frozenApps.size).coerceAtLeast(0)
@@ -640,6 +642,7 @@ fun AppPickerDialog(
     LaunchedEffect(frozenIds) { chosen = chosen - frozenIds }
 
     LaunchedEffect(Unit) {
+        viewModel.clearFailedApps()
         viewModel.loadInstalledApps()
     }
 
@@ -668,6 +671,10 @@ fun AppPickerDialog(
                 modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
             )
             Text("${chosen.size} selected · $remaining slots available", color = Color(0xFFB3E5FC), fontSize = 13.sp)
+            if (failedIds.isNotEmpty() && !isFreezing && fallbackApp == null) {
+                Text("${failedIds.size} could not be frozen. They remain selected so you can retry.",
+                    color = Color(0xFFFFC9A6), fontSize = 13.sp)
+            }
             Spacer(Modifier.height(8.dp))
             if (isLoading) {
                 Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
@@ -700,11 +707,11 @@ fun AppPickerDialog(
             }
             Spacer(Modifier.height(12.dp))
             Button(
-                enabled = chosen.isNotEmpty() && !isFreezing,
+                enabled = chosen.isNotEmpty() && !isFreezing && fallbackApp == null,
                 onClick = { onAppsSelected(installedApps.filter { it.packageName in chosen && it.packageName !in frozenIds }) },
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF84D8F5), contentColor = Color(0xFF082238), disabledContainerColor = Color(0xFF294758), disabledContentColor = Color(0xFF90AAB8)),
                 modifier = Modifier.fillMaxWidth().height(52.dp)
-            ) { Text(if (isFreezing) "Freezing…" else if (chosen.isEmpty()) "Select apps to freeze" else "Freeze ${chosen.size} selected", fontWeight = FontWeight.Bold) }
+            ) { Text(if (isFreezing) "Freezing…" else if (chosen.isEmpty()) "Select apps to freeze" else if (failedIds.isNotEmpty() && chosen == failedIds) "Retry ${chosen.size} selected" else "Freeze ${chosen.size} selected", fontWeight = FontWeight.Bold) }
         }
     }
 }

@@ -129,6 +129,8 @@ class FreezerViewModel(application: Application) : AndroidViewModel(application)
     val isFreezing: StateFlow<Boolean> = _isFreezing.asStateFlow()
     private val fallbackQueue = ArrayDeque<InstalledApp>()
 
+    fun clearFailedApps() { _failedAppIds.value = emptySet() }
+
     fun selectApps(apps: List<InstalledApp>) {
         if (_isFreezing.value || _fallbackApp.value != null) return
         viewModelScope.launch {
