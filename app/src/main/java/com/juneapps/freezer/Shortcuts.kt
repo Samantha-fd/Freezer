@@ -8,6 +8,11 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import androidx.core.graphics.drawable.toBitmap
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import android.widget.RemoteViews
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -54,11 +59,15 @@ class FreezerWidget : AppWidgetProvider() {
                 val target = prefs.getString(ShortcutTarget.widgetKey(id), null)
                 val record = records.firstOrNull { it.packageName == target }
                 val views = RemoteViews(context.packageName, R.layout.freezer_widget)
-                views.setTextViewText(R.id.widget_text, record?.let { "Unfreeze ${it.appName}" } ?: "App unavailable")
-                if (record != null) {
-                    val intent = Intent(context, ShortcutActivity::class.java).putExtra(ShortcutTarget.EXTRA_PACKAGE, record.packageName)
+                views.setTextViewText(R.id.widget_text, record?.let { "${it.appName}\nFrozen · tap to unfreeze" } ?: "Open Freezer")
+                val icon = try {
+                    record?.let { context.packageManager.getApplicationIcon(it.packageName) }
+                } catch (_: android.content.pm.PackageManager.NameNotFoundException) { null }
+                views.setImageViewBitmap(R.id.widget_icon, (icon ?: context.applicationInfo.loadIcon(context.packageManager)).toBitmap(96, 96))
+                run {
+                    val intent = Intent(context, ShortcutActivity::class.java).putExtra(ShortcutTarget.EXTRA_PACKAGE, record?.packageName)
                     val pending = PendingIntent.getActivity(context, id, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-                    views.setOnClickPendingIntent(R.id.widget_text, pending)
+                    views.setOnClickPendingIntent(R.id.widget_root, pending)
                 }
                 manager.updateAppWidget(id, views)
             }
@@ -80,12 +89,19 @@ class WidgetConfigActivity : ComponentActivity() {
                     Text("Choose a frozen app", style = MaterialTheme.typography.titleLarge)
                     if (records.isEmpty()) Text("Freeze an app in Freezer first.")
                     LazyColumn { items(records) { record ->
-                        Text(record.appName, Modifier.fillMaxWidth().clickable {
+                        Row(Modifier.fillMaxWidth().clickable {
                             getSharedPreferences(ShortcutTarget.PREFS, Context.MODE_PRIVATE).edit().putString(ShortcutTarget.widgetKey(id), record.packageName).apply()
                             FreezerWidget.update(this@WidgetConfigActivity, AppWidgetManager.getInstance(this@WidgetConfigActivity), intArrayOf(id))
                             setResult(RESULT_OK, Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id))
                             finish()
-                        }.padding(16.dp))
+                        }.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            val icon = remember(record.packageName) {
+                                try { packageManager.getApplicationIcon(record.packageName).toBitmap(96, 96).asImageBitmap() }
+                                catch (_: android.content.pm.PackageManager.NameNotFoundException) { null }
+                            }
+                            if (icon != null) Image(icon, contentDescription = null, modifier = Modifier.size(40.dp).padding(end = 8.dp))
+                            Text(record.appName)
+                        }
                     } }
                 }
             }

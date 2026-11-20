@@ -1,1 +1,8 @@
-<TextView xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/widget_text" android:layout_width="match_parent" android:layout_height="match_parent" android:gravity="center" android:background="#13293D" android:textColor="#B3E5FC" android:padding="12dp" android:text="Freezer" />
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:gravity="center" android:orientation="horizontal" android:background="#13293D" android:padding="12dp">
+    <ImageView android:id="@+id/widget_icon" android:layout_width="40dp" android:layout_height="40dp"
+        android:contentDescription="@null" />
+    <TextView android:id="@+id/widget_text" android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:layout_marginStart="8dp" android:textColor="#B3E5FC" android:text="Open Freezer" />
+</LinearLayout>
