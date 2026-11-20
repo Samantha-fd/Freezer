@@ -500,6 +500,7 @@ fun ShatterOverlay(progress: Float) {
     Canvas(modifier = Modifier.fillMaxSize()) {
         val center = Offset(size.width / 2f, size.height / 2f)
         val fade = (1f - progress).coerceIn(0f, 1f)
+        val burst = (progress * 5f).coerceIn(0f, 1f) * fade
         val distance = size.minDimension * progress
         // Soft expanding clouds give the shards a frosty burst.
         for (i in 0 until 7) {
@@ -507,9 +508,15 @@ fun ShatterOverlay(progress: Float) {
             val cloudCenter = center + Offset(kotlin.math.cos(angle).toFloat(), kotlin.math.sin(angle).toFloat()) * (distance * .58f)
             val radius = size.minDimension * (.12f + progress * .32f)
             drawCircle(brush = Brush.radialGradient(
-                colors = listOf(Color(0xFFE5FBFF).copy(alpha = fade * .35f), Color(0xFFB3ECFF).copy(alpha = 0f)),
+                colors = listOf(Color(0xFFE5FBFF).copy(alpha = burst * .35f), Color(0xFFB3ECFF).copy(alpha = 0f)),
                 center = cloudCenter, radius = radius
             ), radius = radius, center = cloudCenter)
+        }
+        for (i in 0 until 16) {
+            val angle = i * (Math.PI * 2 / 16) + .2
+            val direction = Offset(kotlin.math.cos(angle).toFloat(), kotlin.math.sin(angle).toFloat())
+            val point = center + direction * (distance * (0.55f + (i % 3) * .16f))
+            drawCircle(Color.White.copy(alpha = burst * .8f), radius = size.minDimension * .018f, center = point)
         }
         for (i in 0 until 12) {
             val angle = i * (Math.PI * 2 / 12) + if (i % 2 == 0) .12 else -.08
@@ -522,8 +529,8 @@ fun ShatterOverlay(progress: Float) {
                 lineTo(point.x - direction.x * shard * .6f + direction.y * shard * .3f, point.y - direction.y * shard * .6f - direction.x * shard * .3f)
                 close()
             }
-            drawPath(path, Color(0xFFBEF4FF).copy(alpha = fade * .9f))
-            drawPath(path, Color.White.copy(alpha = fade), style = Stroke(width = 1.dp.toPx()))
+            drawPath(path, Color(0xFFBEF4FF).copy(alpha = burst * .9f))
+            drawPath(path, Color.White.copy(alpha = burst), style = Stroke(width = 1.dp.toPx()))
         }
     }
 }

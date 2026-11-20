@@ -208,7 +208,7 @@ class FreezerViewModel(application: Application) : AndroidViewModel(application)
                 freezeRepository.unfreezeApp(app.packageName, method)
             }
             if (result is FreezeRepository.FreezeResult.Success) {
-                _shatteringAppIds.value = _shatteringAppIds.value + app.packageName
+                startShatter(app.packageName)
                 frozenAppsStore.removeFrozenApp(app.packageName)
                 ShortcutTarget.refresh(getApplication())
                 _lastResult.value = UiMessage.Info("${app.appName} unfrozen")
@@ -234,7 +234,7 @@ class FreezerViewModel(application: Application) : AndroidViewModel(application)
             if (result is FreezeRepository.FreezeResult.Success) {
                 frozenAppsStore.removeFrozenApp(record.packageName)
                 if (_selectedApps.value.any { it.packageName == record.packageName }) {
-                    _shatteringAppIds.value = _shatteringAppIds.value + record.packageName
+                    startShatter(record.packageName)
                 } else {
                     _selectedApps.value = _selectedApps.value.filterNot { it.packageName == record.packageName }
                 }
@@ -249,6 +249,14 @@ class FreezerViewModel(application: Application) : AndroidViewModel(application)
                     else -> "Could not unfreeze app."
                 })
             }
+        }
+    }
+
+    private fun startShatter(packageName: String) {
+        _shatteringAppIds.value = _shatteringAppIds.value + packageName
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(1500)
+            if (packageName in _shatteringAppIds.value) completeShatter(packageName)
         }
     }
 
